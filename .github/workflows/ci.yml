@@ -1,0 +1,37 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.10", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          python-version: ${{ matrix.python }}
+      - run: uv sync
+      - run: uv run ruff check graphspot tests scripts
+      - run: uv run ruff format --check graphspot tests scripts
+      - run: uv run pytest -q
+
+  bare-core:
+    # The core must install and import with no torch anywhere near it.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.12"
+      - run: uv build
+      - run: |
+          uv venv bare
+          uv pip install --python bare/bin/python dist/*.whl
+          bare/bin/python -c "import sys, graphspot; assert 'torch' not in sys.modules; print('bare core ok', graphspot.__version__)"
