@@ -42,4 +42,25 @@ g = graphspot.Graph.from_pandas(
 )
 ```
 
+## Benchmarks
+
+Every number regenerates from one command: `graphspot bench --quick`. AUPRC x100,
+mean over three seeded trials, on the four auto-download datasets, out-of-the-box
+defaults, no torch installed. Tolokers and Questions use the split masks their
+upstream ships; the flat baseline is the same XGBoost on raw features with no graph.
+
+```
+dataset         XGBGraph       RFGraph  FlatBaseline
+----------------------------------------------------
+yelpchi      89.32±0.42*   76.76±0.41    83.45±0.51
+amazon       93.75±0.57*   89.70±1.00    90.25±1.22
+tolokers     57.34±1.34    58.18±1.35*   38.61±0.70
+questions    22.05±1.30*   16.09±1.49    16.77±1.50
+```
+
+Read the losses too: on YelpChi and Amazon the plain random forest does not beat
+the no-graph baseline. Publishing where the graph does not help is the point.
+
+macOS note: xgboost needs Homebrew's libomp (`brew install libomp`).
+
 License: BSD-3-Clause.
