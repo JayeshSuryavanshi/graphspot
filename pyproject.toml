@@ -1,6 +1,6 @@
 [project]
 name = "graphspot"
-version = "0.1.0a1"
+version = "0.2.0.dev0"
 description = "Inductive graph anomaly detection with honest baselines. Scores nodes and edges it has never seen, installs without torch."
 readme = "README.md"
 requires-python = ">=3.10,<3.14"
@@ -27,6 +27,9 @@ dependencies = [
 
 [project.optional-dependencies]
 deep = ["torch>=2.2", "torch_geometric>=2.5"]
+
+[project.scripts]
+graphspot = "graphspot.cli:main"
 
 [project.urls]
 Repository = "https://github.com/JayeshSuryavanshi/graphspot"

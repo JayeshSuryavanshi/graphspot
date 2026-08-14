@@ -25,6 +25,7 @@ class Graph:
     edge_time: np.ndarray | None = None
     node_labels: np.ndarray | None = None
     edge_labels: np.ndarray | None = None
+    node_time: np.ndarray | None = None
     node_index: pd.Index | None = None
     feature_names: list[str] = field(default_factory=list)
 
