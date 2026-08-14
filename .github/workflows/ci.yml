@@ -8,12 +8,16 @@ on:
 jobs:
   test:
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
         python: ["3.10", "3.13"]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      # xgboost's macOS wheel links libomp from Homebrew, absent on GitHub runners
+      - if: runner.os == 'macOS'
+        run: brew install libomp
       - uses: astral-sh/setup-uv@v4
         with:
           python-version: ${{ matrix.python }}
