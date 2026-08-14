@@ -1,6 +1,6 @@
 [project]
 name = "graphspot"
-version = "0.1.0.dev0"
+version = "0.1.0a1"
 description = "Inductive graph anomaly detection with honest baselines. Scores nodes and edges it has never seen, installs without torch."
 readme = "README.md"
 requires-python = ">=3.10,<3.14"

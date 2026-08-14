@@ -3,7 +3,7 @@ from graphspot.graph import Graph, as_graph
 from graphspot.metrics import evaluate
 from graphspot.transforms import NeighborAggregation
 
-__version__ = "0.1.0.dev0"
+__version__ = "0.1.0a1"
 
 __all__ = [
     "BaseDetector",
