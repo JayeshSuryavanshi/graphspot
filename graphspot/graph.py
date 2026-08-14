@@ -28,6 +28,7 @@ class Graph:
     node_time: np.ndarray | None = None
     node_index: pd.Index | None = None
     feature_names: list[str] = field(default_factory=list)
+    edge_feature_names: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.adj = sp.csr_matrix(self.adj)
@@ -85,8 +86,10 @@ class Graph:
             feature_names = [str(c) for c in node_features.columns]
 
         edge_attr = None
+        edge_feature_names: list[str] = []
         if edge_features:
             edge_attr = df[list(edge_features)].to_numpy(dtype=np.float64)
+            edge_feature_names = [str(c) for c in edge_features]
 
         edge_time = None
         if time is not None:
@@ -108,6 +111,7 @@ class Graph:
             edge_time=edge_time,
             node_index=index,
             feature_names=feature_names,
+            edge_feature_names=edge_feature_names,
         )
 
     @classmethod
@@ -164,6 +168,7 @@ class Graph:
             edge_labels=None if self.edge_labels is None else self.edge_labels[keep],
             node_index=self.node_index,
             feature_names=list(self.feature_names),
+            edge_feature_names=list(self.edge_feature_names),
         )
 
 

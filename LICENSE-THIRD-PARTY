@@ -1,0 +1,10 @@
+Third-party algorithm provenance
+================================
+
+FRAUDAR (graphspot/detectors/fraudar.py)
+  Implemented clean-room from the published paper alone:
+  Hooi, Song, Beutel, Shah, Shin, Faloutsos. "FRAUDAR: Bounding Graph Fraud in
+  the Face of Camouflage", KDD 2016.
+  No existing implementation was consulted at any point; in particular the
+  GPL-3.0 rgmining/fraudar source was never opened. The implementation here is
+  original work under this repository's BSD-3-Clause license.

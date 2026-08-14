@@ -7,11 +7,11 @@ import numpy as np
 
 from graphspot.base import BaseDetector
 from graphspot.graph import as_graph
-from graphspot.transforms import NeighborAggregation
+from graphspot.transforms import NeighborAggregation, ensure_node_features
 
 
 class _SupervisedTreeDetector(BaseDetector):
-    supported_levels = ("node",)
+    supported_levels = ("node", "edge")
 
     def __init__(
         self,
@@ -81,14 +81,23 @@ class _NeighborAggregationDetector(_SupervisedTreeDetector):
         self.aggregators = tuple(aggregators)
 
     def _fit_features(self, graph: Any) -> np.ndarray:
+        g = ensure_node_features(as_graph(graph))
         self.aggregation_ = NeighborAggregation(hops=self.hops, aggregators=self.aggregators)
-        return self.aggregation_.fit_transform(graph)
+        self.aggregation_.fit(g)
+        if self.level == "edge":
+            self._names = self.aggregation_.edge_feature_names(g)
+            return self.aggregation_.transform_edges(g)
+        self._names = self.aggregation_.feature_names_
+        return self.aggregation_.transform(g)
 
     def _features(self, graph: Any) -> np.ndarray:
-        return self.aggregation_.transform(graph)
+        g = ensure_node_features(as_graph(graph))
+        if self.level == "edge":
+            return self.aggregation_.transform_edges(g)
+        return self.aggregation_.transform(g)
 
     def _feature_names(self) -> list[str]:
-        return self.aggregation_.feature_names_
+        return self._names
 
 
 class XGBGraph(_NeighborAggregationDetector):
@@ -148,18 +157,33 @@ class FlatBaseline(_SupervisedTreeDetector):
         self.estimator = estimator
 
     def _fit_features(self, graph: Any) -> np.ndarray:
-        g = as_graph(graph)
-        if g.x is None:
-            raise ValueError("FlatBaseline needs node features (graph.x)")
+        g = ensure_node_features(as_graph(graph))
         self.n_features_in_ = g.x.shape[1]
-        self._names = g.feature_names or [f"f{i}" for i in range(self.n_features_in_)]
-        return g.x
+        base = g.feature_names or [f"f{i}" for i in range(self.n_features_in_)]
+        if self.level == "edge":
+            self._names = [f"src_{n}" for n in base] + [f"dst_{n}" for n in base]
+            if g.edge_attr is not None:
+                self._names += g.edge_feature_names or [
+                    f"e{i}" for i in range(g.edge_attr.shape[1])
+                ]
+        else:
+            self._names = list(base)
+        return self._flat_features(g)
 
     def _features(self, graph: Any) -> np.ndarray:
-        g = as_graph(graph)
-        if g.x is None or g.x.shape[1] != self.n_features_in_:
+        g = ensure_node_features(as_graph(graph))
+        if g.x.shape[1] != self.n_features_in_:
             raise ValueError(f"Graph must carry {self.n_features_in_} node features")
-        return g.x
+        return self._flat_features(g)
+
+    def _flat_features(self, g: Any) -> np.ndarray:
+        if self.level == "node":
+            return g.x
+        src, dst = g.edge_index[0], g.edge_index[1]
+        blocks = [g.x[src], g.x[dst]]
+        if g.edge_attr is not None:
+            blocks.append(g.edge_attr)
+        return np.hstack(blocks)
 
     def _feature_names(self) -> list[str]:
         return self._names

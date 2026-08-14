@@ -118,3 +118,54 @@ class NeighborAggregation:
 
     def fit_transform(self, graph: Any) -> np.ndarray:
         return self.fit(graph).transform(graph)
+
+    def transform_edges(self, graph: Any) -> np.ndarray:
+        """Edge features: both endpoints' aggregated neighborhoods, then raw edge attributes."""
+        g = as_graph(graph)
+        if g.edge_index is None:
+            raise ValueError("Graph has no edges to score")
+        node_feats = self.transform(g)
+        src, dst = g.edge_index[0], g.edge_index[1]
+        blocks = [node_feats[src], node_feats[dst]]
+        if g.edge_attr is not None:
+            blocks.append(g.edge_attr)
+        return np.hstack(blocks)
+
+    def edge_feature_names(self, graph: Any) -> list[str]:
+        g = as_graph(graph)
+        names = [f"src_{n}" for n in self.feature_names_]
+        names += [f"dst_{n}" for n in self.feature_names_]
+        if g.edge_attr is not None:
+            base = g.edge_feature_names or [f"e{i}" for i in range(g.edge_attr.shape[1])]
+            names += list(base)
+        return names
+
+
+def ensure_node_features(g):
+    """Return `g`, or a copy carrying synthesized node features when it has none.
+
+    A bare transaction log has no account-level features, but its edges do. The synthesized
+    features are each node's mean incident edge attributes (both directions) plus log1p
+    in/out degree, which is enough for neighborhood aggregation to work on a plain edge list.
+    """
+    from dataclasses import replace
+
+    if g.x is not None:
+        return g
+    n = g.n_nodes
+    deg_out = np.asarray(g.adj.sum(axis=1)).ravel()
+    deg_in = np.asarray(g.adj.sum(axis=0)).ravel()
+    blocks = [np.log1p(deg_out)[:, None], np.log1p(deg_in)[:, None]]
+    names = ["log1p_out_degree", "log1p_in_degree"]
+    if g.edge_attr is not None and g.edge_index is not None:
+        d = g.edge_attr.shape[1]
+        sums = np.zeros((n, d))
+        counts = np.zeros(n)
+        for endpoint in (g.edge_index[0], g.edge_index[1]):
+            np.add.at(sums, endpoint, g.edge_attr)
+            np.add.at(counts, endpoint, 1.0)
+        means = sums / np.maximum(counts, 1.0)[:, None]
+        blocks.append(means)
+        base = g.edge_feature_names or [f"e{i}" for i in range(d)]
+        names += [f"incident_mean({b})" for b in base]
+    return replace(g, x=np.hstack(blocks), feature_names=names)

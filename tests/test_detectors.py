@@ -110,7 +110,7 @@ def test_supervised_requires_labels():
 
 def test_unsupported_level_rejected_at_construction():
     with pytest.raises(ValueError, match="supports levels"):
-        XGBGraph(level="edge")
+        XGBGraph(level="block")
 
 
 def test_explain_names_map_to_hops():
