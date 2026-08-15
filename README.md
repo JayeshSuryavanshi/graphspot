@@ -1,64 +1,106 @@
 # graphspot
 
-Graph anomaly detection for people who have to score things they have never seen before.
+**Graph anomaly detection for things you haven't seen yet.**
 
-- **Inductive by contract.** Every detector's `decision_function` scores nodes absent at fit
-  time. Never `NotImplementedError`.
-- **Installs without torch.** The core is numpy/scipy/sklearn/pandas/xgboost. Deep detectors
-  live behind `pip install graphspot[deep]`.
-- **Honest baselines.** Every evaluation can include a no-graph tabular baseline, and graphspot
-  warns loudly when the graph model fails to beat it.
+[![PyPI](https://img.shields.io/pypi/v/graphspot)](https://pypi.org/project/graphspot/)
+[![Python](https://img.shields.io/pypi/pyversions/graphspot)](https://pypi.org/project/graphspot/)
+[![CI](https://github.com/JayeshSuryavanshi/graphspot/actions/workflows/ci.yml/badge.svg)](https://github.com/JayeshSuryavanshi/graphspot/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-BSD--3--Clause-blue)](LICENSE)
 
-Status: pre-release, under active development. The v0 detector set is
-`NeighborAggregation` (transform), `XGBGraph`, `RFGraph`, `FlatBaseline`, with
-`FlatUnsupervised`, `OddBall`, `Fraudar` and `BWGNN` (behind `[deep]`) on the way.
+graphspot scores **nodes and edges that were absent at fit time** — new accounts, new
+transactions, tomorrow's data. It installs in seconds without torch, takes a pandas
+dataframe or a scipy sparse matrix, and every benchmark number in this README
+regenerates from one command.
+
+```bash
+pip install graphspot            # tree, structural, and baseline detectors
+pip install 'graphspot[deep]'    # + BWGNN (torch)
+```
+
+## Sixty seconds
 
 ```python
-import graphspot
-from graphspot.detectors import XGBGraph, FlatBaseline
+import pandas as pd, graphspot
+
+tx = pd.read_parquet("transactions.parquet")
+
+# one call on a bare edge list: one anomaly score per row
+scores = graphspot.score_transactions(
+    tx, source="buyer_id", target="seller_id",
+    labels="chargeback",            # NaN / -1 = unlabeled
+    edge_features=["amount"],
+)
+```
+
+Or the full API:
+
+```python
 from graphspot.datasets import load_yelpchi
+from graphspot.detectors import XGBGraph, FlatBaseline, Fraudar
 
 g = load_yelpchi()
 
 det = XGBGraph(random_state=0).fit(g, y=g.node_labels)
 flat = FlatBaseline(random_state=0).fit(g, y=g.node_labels)
 
-print(graphspot.evaluate(
-    g.node_labels,
-    det.decision_scores_,
-    baseline_scores=flat.decision_scores_,
-))
+graphspot.evaluate(g.node_labels, det.decision_scores_,
+                   baseline_scores=flat.decision_scores_)
+# warns loudly if the graph model loses to the no-graph baseline
 
-det.explain(k=5)   # e.g. [("2hop_mean(f21)", 0.14), ("1hop_max(f3)", 0.11), ...]
+det.explain(k=3)
+# [("2hop_mean(f21)", 0.14), ("1hop_max(f3)", 0.11), ...]
+
+rings = Fraudar().fit(g)            # label-free, feature-free collusion blocks
+rings.explain()
 ```
 
-`list_detectors()` reports what is usable in your environment, and any PyOD detector
-runs through graphspot's graphs and benchmarks in one line:
+## Why graphspot
+
+| | graphspot | PyGOD | PyOD graph module |
+|---|---|---|---|
+| Scores unseen nodes/edges | **yes, every detector** | no (transductive in practice) | no (`decision_function` raises) |
+| Core install | numpy/scipy/sklearn/xgboost | requires torch (undeclared) | requires torch |
+| Edge-level scoring | **yes** | node only | node only |
+| Honest flat baselines | **automatic, warns when graph loses** | no | no |
+| Label provenance metadata | **every dataset** | no | no |
+| Maintained | yes | last release Feb 2024 | active |
+
+Three design rules, each earned from a failure we measured elsewhere:
+
+1. **`decision_function` never raises `NotImplementedError`.** Inductive scoring is the
+   contract, not a feature.
+2. **The core never imports torch.** CI installs the built wheel in a bare venv and
+   asserts it. Deep detectors live behind `[deep]`.
+3. **Every number is regenerable.** `scripts/kill_test.py` reproduces GADBench's
+   published results under their protocol; `graphspot bench --quick` rebuilds the
+   table below; a monthly CI job re-runs both from scratch.
+
+## Detectors
+
+| Detector | Level | Labels | Needs | Reference |
+|---|---|---|---|---|
+| `NeighborAggregation` | transform | — | core | makes any tabular model graph-aware |
+| `XGBGraph` | node, edge | yes | core | GADBench rank 1 of 29 |
+| `RFGraph` | node, edge | yes | core | GADBench rank 3 |
+| `FlatBaseline` | node, edge | yes | core | the no-graph control, always available |
+| `FlatUnsupervised` | node | no | core | IForest / LOF (BOND: each beats every deep model somewhere) |
+| `OddBall` | node | no | core | Akoglu et al., PAKDD 2010 |
+| `Fraudar` | edge, block | no | core | Hooi et al., KDD 2016 (clean-room, BSD-3) |
+| `BWGNN` | node | yes | `[deep]` | Tang et al., ICML 2022 (clean-room, plain torch sparse) |
+
+`graphspot.list_detectors()` reports what is usable in your environment. Any PyOD
+detector runs through graphspot's graphs and benchmarks in one line:
 
 ```python
-import graphspot
-graphspot.list_detectors()
-
 from pyod.models.ecod import ECOD
-det = graphspot.compat.from_pyod(ECOD()).fit(g)   # ECOD over neighbor-aggregated features
-```
-
-Works directly on transaction dataframes:
-
-```python
-g = graphspot.Graph.from_pandas(
-    tx, source="buyer_id", target="seller_id",
-    edge_features=["amount"], time="ts",
-    node_features=accounts.set_index("account_id"),
-)
+det = graphspot.compat.from_pyod(ECOD()).fit(g)
 ```
 
 ## Benchmarks
 
-Every number regenerates from one command: `graphspot bench --quick`. AUPRC x100,
-mean over three seeded trials, on the four auto-download datasets, out-of-the-box
-defaults, no torch installed. Tolokers and Questions use the split masks their
-upstream ships; the flat baseline is the same XGBoost on raw features with no graph.
+`graphspot bench --quick` — AUPRC ×100, mean over three seeded trials, out-of-the-box
+defaults, no torch installed. Tolokers and Questions use the frozen split masks their
+upstream ships.
 
 ```
 dataset         XGBGraph       RFGraph  FlatBaseline
@@ -69,42 +111,77 @@ tolokers     57.34±1.34    58.18±1.35*   38.61±0.70
 questions    22.05±1.30*   16.09±1.49    16.77±1.50
 ```
 
-Read the losses too: on YelpChi and Amazon the plain random forest does not beat
-the no-graph baseline. Publishing where the graph does not help is the point.
+Read the losses too: on YelpChi and Amazon the plain random forest does not beat the
+no-graph baseline. Publishing where the graph does not help is the point.
 
-macOS notes: xgboost needs Homebrew's libomp (`brew install libomp`). And torch
-(the `[deep]` extra) cannot share a process with xgboost on macOS: each bundles its
-own OpenMP runtime and the mix segfaults or deadlocks. graphspot guards this with a
-clear error instead of a crash; run deep and tree detectors in separate processes
-there. Linux is unaffected.
+Under GADBench's own selection protocol (validation-selected hyperparameters, their
+Amazon label conventions), `scripts/kill_test.py` reproduces their published numbers:
+YelpChi 92.45±0.29 (published 91.11), Amazon 93.91±0.96 (published 93.33). BWGNN
+reproduces its published Amazon AUROC within 0.74 points on CPU
+(`scripts/demo_bwgnn.py`).
 
 ## The acceptance test
 
-Strict-inductive Elliptic, one command, on a laptop, no torch:
-`uv run python scripts/acceptance_elliptic.py` fits on time steps 1-34 and scores
-steps 35-49 as a disjoint graph the model has never seen. 203,769 nodes; fit 10.1s,
-score 0.8s, peak rss 3.05GB. PyOD's graph detectors raise `NotImplementedError` on
-`decision_function`; PyGOD's flagship OOMs on this graph on a 12 GB GPU.
+Strict-inductive Elliptic on a laptop, one command, no torch:
 
-Two honest findings the per-step table makes visible. The dark-market shutdown at
-step 43 collapses every model (AUPRC in the 90s drops to single digits), which is
-why the script refuses to print a single aggregate number. And on this dataset the
-graph model does not beat the flat baseline (mean per-step AUPRC 55.3 vs 56.4):
-Elliptic's feature matrix already contains 72 neighborhood-aggregate columns
-computed by the dataset authors, so the flat model is quietly graph-informed. The
-loud baseline exists precisely to surface results like this.
+```bash
+uv run python scripts/acceptance_elliptic.py
+```
 
+Fits on time steps 1–34 and scores steps 35–49 as a disjoint graph the model has never
+seen: 203,769 nodes, **fit 10.1s, score 0.8s, peak rss 3.05GB**. The per-step table
+shows why the script refuses to print one aggregate number: the dark-market shutdown
+at step 43 collapses every model from 90s AUPRC to single digits. And on this dataset
+the flat baseline edges out the graph model (56.4 vs 55.3 mean per-step AUPRC) —
+Elliptic's features already embed 72 neighborhood aggregates, so the "flat" model is
+quietly graph-informed. The loud baseline exists to surface exactly this.
 
+## Datasets
+
+Seven loaders with provenance as first-class metadata — every dataset carries
+`label_type` (adjudicated / proxy / injected), `label_source`, license, and
+redistribution status:
+
+| Dataset | Nodes | Labels | Auto-download |
+|---|---|---|---|
+| YelpChi | 45,954 | proxy (filtered reviews) | yes |
+| Amazon | 11,944 | proxy (helpful votes; first 3,305 unlabeled by convention) | yes |
+| Tolokers | 11,758 | adjudicated (banned workers) | yes |
+| Questions | 48,921 | adjudicated | yes |
+| Elliptic | 203,769 | proxy (licit/illicit tags), 49 time steps | gated: `accept_license=True` (CC BY-NC-ND) |
+
+Splits are utilities, not afterthoughts: seeded stratified, GADBench's 100-label
+semi-supervised regime, and `temporal_split` for strict-inductive evaluation.
+`evaluate_temporal` reports per-step metrics; `base_rate_sweep` re-evaluates as
+positives thin toward production rarity.
+
+## Platform notes
+
+- macOS: xgboost needs Homebrew's libomp (`brew install libomp`).
+- macOS: torch and xgboost cannot share one process (each bundles its own OpenMP
+  runtime; the mix segfaults or deadlocks). graphspot raises a clear error instead of
+  crashing; run `[deep]` and tree detectors in separate processes. Linux is
+  unaffected, and CI proves coexistence there.
 
 ## Support
 
-- Versioning: pre-1.0, minor releases may change APIs; anything removed gets a
-  deprecation release first. Fitted-attribute names (`decision_scores_`,
-  `labels_`, `threshold_`) are stable and PyOD-compatible.
-- Scope: node and edge level anomaly detection on static graphs. Graph-level
+- Pre-1.0: minor releases may change APIs; anything removed gets a deprecation release
+  first. Fitted-attribute names (`decision_scores_`, `labels_`, `threshold_`) are
+  stable and PyOD-compatible.
+- Scope: node- and edge-level anomaly detection on static graphs. Graph-level
   detection and streaming are out of scope for now.
-- Every README number regenerates from one command (`scripts/kill_test.py`,
-  `graphspot bench --quick`), and a monthly CI job re-runs them.
-- Issues and PRs are welcome; small reproducible bug reports get priority.
+- Small reproducible bug reports get priority. Issues and PRs welcome.
 
-License: BSD-3-Clause.
+## Citation
+
+```bibtex
+@software{graphspot,
+  author = {Suryavanshi, Jayesh},
+  title  = {graphspot: inductive graph anomaly detection with honest baselines},
+  url    = {https://github.com/JayeshSuryavanshi/graphspot},
+  year   = {2026},
+}
+```
+
+Third-party algorithm provenance is documented in
+[LICENSE-THIRD-PARTY](LICENSE-THIRD-PARTY). License: BSD-3-Clause.

@@ -1,0 +1,9 @@
+cff-version: 1.2.0
+message: "If you use graphspot in your research, please cite it as below."
+title: "graphspot: inductive graph anomaly detection with honest baselines"
+authors:
+  - family-names: Suryavanshi
+    given-names: Jayesh
+repository-code: "https://github.com/JayeshSuryavanshi/graphspot"
+url: "https://pypi.org/project/graphspot/"
+license: BSD-3-Clause
