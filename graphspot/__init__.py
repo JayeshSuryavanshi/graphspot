@@ -1,7 +1,12 @@
 from graphspot.base import BaseDetector
 from graphspot.graph import Graph, as_graph
 from graphspot.metrics import evaluate
-from graphspot.splits import semi_supervised_split, stratified_split, train_labels
+from graphspot.splits import (
+    semi_supervised_split,
+    stratified_split,
+    temporal_split,
+    train_labels,
+)
 from graphspot.transactions import score_transactions
 from graphspot.transforms import NeighborAggregation
 
@@ -16,6 +21,7 @@ __all__ = [
     "score_transactions",
     "semi_supervised_split",
     "stratified_split",
+    "temporal_split",
     "train_labels",
     "__version__",
 ]

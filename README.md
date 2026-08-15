@@ -63,4 +63,21 @@ the no-graph baseline. Publishing where the graph does not help is the point.
 
 macOS note: xgboost needs Homebrew's libomp (`brew install libomp`).
 
+## The acceptance test
+
+Strict-inductive Elliptic, one command, on a laptop, no torch:
+`uv run python scripts/acceptance_elliptic.py` fits on time steps 1-34 and scores
+steps 35-49 as a disjoint graph the model has never seen. 203,769 nodes; fit 10.1s,
+score 0.8s, peak rss 3.05GB. PyOD's graph detectors raise `NotImplementedError` on
+`decision_function`; PyGOD's flagship OOMs on this graph on a 12 GB GPU.
+
+Two honest findings the per-step table makes visible. The dark-market shutdown at
+step 43 collapses every model (AUPRC in the 90s drops to single digits), which is
+why the script refuses to print a single aggregate number. And on this dataset the
+graph model does not beat the flat baseline (mean per-step AUPRC 55.3 vs 56.4):
+Elliptic's feature matrix already contains 72 neighborhood-aggregate columns
+computed by the dataset authors, so the flat model is quietly graph-informed. The
+loud baseline exists precisely to surface results like this.
+
+
 License: BSD-3-Clause.

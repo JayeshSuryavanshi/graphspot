@@ -142,6 +142,7 @@ class Graph:
             adj=adj,
             x=None if self.x is None else self.x[nodes],
             node_labels=None if self.node_labels is None else self.node_labels[nodes],
+            node_time=None if self.node_time is None else self.node_time[nodes],
             node_index=None if self.node_index is None else self.node_index[nodes],
             feature_names=list(self.feature_names),
         )

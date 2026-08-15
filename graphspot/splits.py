@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import numpy as np
 
+from graphspot.graph import Graph
+
 
 def stratified_split(
     y: np.ndarray,
@@ -69,3 +71,14 @@ def train_labels(y: np.ndarray, train_idx: np.ndarray) -> np.ndarray:
     out = np.full(len(y), -1, dtype=np.int64)
     out[train_idx] = np.asarray(y)[train_idx]
     return out
+
+
+def temporal_split(g: Graph, cutoff: float) -> tuple[Graph, Graph]:
+    """Strict inductive split on node time: everything at or before `cutoff` is the
+    training graph, everything after is the test graph, as two disjoint reindexed
+    subgraphs. The model never sees a test node, edge, or label at fit time. For
+    edge-timestamped graphs use `Graph.before` instead.
+    """
+    if g.node_time is None:
+        raise ValueError("Graph has no node_time; for edge_time graphs use Graph.before(t)")
+    return g.subgraph(g.node_time <= cutoff), g.subgraph(g.node_time > cutoff)
