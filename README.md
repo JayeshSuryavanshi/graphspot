@@ -61,7 +61,11 @@ questions    22.05±1.30*   16.09±1.49    16.77±1.50
 Read the losses too: on YelpChi and Amazon the plain random forest does not beat
 the no-graph baseline. Publishing where the graph does not help is the point.
 
-macOS note: xgboost needs Homebrew's libomp (`brew install libomp`).
+macOS notes: xgboost needs Homebrew's libomp (`brew install libomp`). And torch
+(the `[deep]` extra) cannot share a process with xgboost on macOS: each bundles its
+own OpenMP runtime and the mix segfaults or deadlocks. graphspot guards this with a
+clear error instead of a crash; run deep and tree detectors in separate processes
+there. Linux is unaffected.
 
 ## The acceptance test
 

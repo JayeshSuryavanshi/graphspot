@@ -39,3 +39,14 @@ jobs:
           uv venv bare
           uv pip install --python bare/bin/python dist/*.whl
           bare/bin/python -c "import sys, graphspot; assert 'torch' not in sys.modules; print('bare core ok', graphspot.__version__)"
+
+  deep:
+    # the [deep] extra: BWGNN on torch, ubuntu only (macOS torch is exercised locally)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.12"
+      - run: uv sync --extra deep
+      - run: uv run pytest -q tests/test_bwgnn.py

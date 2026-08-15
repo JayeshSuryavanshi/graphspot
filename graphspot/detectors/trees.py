@@ -10,6 +10,16 @@ from graphspot.graph import as_graph
 from graphspot.transforms import NeighborAggregation, ensure_node_features
 
 
+def _guard_darwin_omp() -> None:
+    """The dual-OpenMP conflict, from the xgboost side; see bwgnn._DARWIN_OMP_MSG."""
+    import sys
+
+    if sys.platform == "darwin" and "torch" in sys.modules:
+        from graphspot.detectors.bwgnn import _DARWIN_OMP_MSG
+
+        raise RuntimeError(_DARWIN_OMP_MSG)
+
+
 class _SupervisedTreeDetector(BaseDetector):
     supported_levels = ("node", "edge")
 
@@ -104,6 +114,7 @@ class XGBGraph(_NeighborAggregationDetector):
     """XGBoost on k-hop neighbor-aggregated features. GADBench's rank-1 detector."""
 
     def _make_estimator(self, y_labeled: np.ndarray) -> Any:
+        _guard_darwin_omp()
         from xgboost import XGBClassifier
 
         pos = int((y_labeled == 1).sum())
@@ -190,6 +201,7 @@ class FlatBaseline(_SupervisedTreeDetector):
 
     def _make_estimator(self, y_labeled: np.ndarray) -> Any:
         if self.estimator == "xgb":
+            _guard_darwin_omp()
             from xgboost import XGBClassifier
 
             pos = int((y_labeled == 1).sum())
