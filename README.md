@@ -32,6 +32,17 @@ print(graphspot.evaluate(
 det.explain(k=5)   # e.g. [("2hop_mean(f21)", 0.14), ("1hop_max(f3)", 0.11), ...]
 ```
 
+`list_detectors()` reports what is usable in your environment, and any PyOD detector
+runs through graphspot's graphs and benchmarks in one line:
+
+```python
+import graphspot
+graphspot.list_detectors()
+
+from pyod.models.ecod import ECOD
+det = graphspot.compat.from_pyod(ECOD()).fit(g)   # ECOD over neighbor-aggregated features
+```
+
 Works directly on transaction dataframes:
 
 ```python
@@ -83,5 +94,17 @@ Elliptic's feature matrix already contains 72 neighborhood-aggregate columns
 computed by the dataset authors, so the flat model is quietly graph-informed. The
 loud baseline exists precisely to surface results like this.
 
+
+
+## Support
+
+- Versioning: pre-1.0, minor releases may change APIs; anything removed gets a
+  deprecation release first. Fitted-attribute names (`decision_scores_`,
+  `labels_`, `threshold_`) are stable and PyOD-compatible.
+- Scope: node and edge level anomaly detection on static graphs. Graph-level
+  detection and streaming are out of scope for now.
+- Every README number regenerates from one command (`scripts/kill_test.py`,
+  `graphspot bench --quick`), and a monthly CI job re-runs them.
+- Issues and PRs are welcome; small reproducible bug reports get priority.
 
 License: BSD-3-Clause.

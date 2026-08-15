@@ -1,0 +1,26 @@
+name: repro
+
+# Regenerates every number the README claims: the kill test (GADBench protocol
+# reproduction) and the benchmark table. On demand and monthly, not per push,
+# out of politeness to the upstream dataset hosts.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 6 3 * *"
+
+jobs:
+  reproduce:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.12"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/graphspot
+          key: graphspot-datasets-v1
+      - run: uv sync
+      - run: uv run python scripts/kill_test.py
+      - run: uv run graphspot bench --quick

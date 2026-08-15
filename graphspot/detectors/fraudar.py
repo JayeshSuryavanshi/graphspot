@@ -135,6 +135,7 @@ class Fraudar(BaseDetector):
 
         self.blocks_: list[Block] = []
         keep = np.ones(len(src), dtype=bool)
+        self._edge_block = np.full(len(src), -1, dtype=np.int64)
         for _ in range(self.n_blocks):
             if not keep.any():
                 break
@@ -150,10 +151,42 @@ class Fraudar(BaseDetector):
                 block.col_ids = list(g.node_index[cols])
             self.blocks_.append(block)
             inside = keep & np.isin(src, rows) & np.isin(dst, cols)
+            self._edge_block[inside] = len(self.blocks_) - 1
             keep &= ~inside
 
         self._finalize_fit(self._score_edges(g))
         return self
+
+    def explain(self, idx: int | None = None, k: int = 5) -> Any:
+        """Without `idx`: the top-k fitted blocks as dicts. With `idx`: the block
+        containing that fit-graph edge, or None if it belongs to no block."""
+        self._check_fitted()
+        if idx is not None:
+            b = int(self._edge_block[idx])
+            if b < 0:
+                return None
+            block = self.blocks_[b]
+            return {
+                "block": b,
+                "density": block.density,
+                "n_rows": len(block.rows),
+                "n_cols": len(block.cols),
+                "n_edges": block.n_edges,
+                "row_ids": block.row_ids,
+                "col_ids": block.col_ids,
+            }
+        ranked = sorted(self.blocks_, key=lambda blk: -blk.density)[:k]
+        return [
+            {
+                "density": blk.density,
+                "n_rows": len(blk.rows),
+                "n_cols": len(blk.cols),
+                "n_edges": blk.n_edges,
+                "row_ids": blk.row_ids,
+                "col_ids": blk.col_ids,
+            }
+            for blk in ranked
+        ]
 
     def decision_function(self, graph: Any) -> np.ndarray:
         self._check_fitted()

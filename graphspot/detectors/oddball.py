@@ -57,8 +57,31 @@ class OddBall(BaseDetector):
         log_n = np.log10(feats[active, 0])
         log_e = np.log10(feats[active, 1])
         self.theta_, self.log_c_ = np.polyfit(log_n, log_e, 1)
+        self.egonet_features_ = feats
         self._finalize_fit(self._out_of_line(feats))
         return self
+
+    def explain(self, idx: int | None = None, k: int = 5):
+        """Per node: neighbors, egonet edges, and the power law's expectation, so a
+        score reads as "9x the edges the law predicts for a 40-neighbor egonet"."""
+        self._check_fitted()
+
+        def row(i: int) -> dict:
+            n, e = self.egonet_features_[i]
+            expected = float(10.0**self.log_c_ * n**self.theta_) if n >= 1 else 0.0
+            return {
+                "node": i,
+                "neighbors": float(n),
+                "egonet_edges": float(e),
+                "expected_edges": expected,
+                "ratio": float(e / expected) if expected > 0 else 0.0,
+                "score": float(self.decision_scores_[i]),
+            }
+
+        if idx is not None:
+            return row(int(idx))
+        top = np.argsort(self.decision_scores_)[::-1][:k]
+        return [row(int(i)) for i in top]
 
     def decision_function(self, graph: Any) -> np.ndarray:
         self._check_fitted()
