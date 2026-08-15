@@ -12,7 +12,7 @@ from graphspot.splits import (
 from graphspot.transactions import score_transactions
 from graphspot.transforms import NeighborAggregation
 
-__version__ = "0.2.0.dev0"
+__version__ = "0.1.0"
 
 __all__ = [
     "compat",
