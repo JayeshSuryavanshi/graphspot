@@ -7,7 +7,7 @@
 [![CI](https://github.com/JayeshSuryavanshi/graphspot/actions/workflows/ci.yml/badge.svg)](https://github.com/JayeshSuryavanshi/graphspot/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-BSD--3--Clause-blue)](LICENSE)
 
-graphspot scores **nodes and edges that were absent at fit time** — new accounts, new
+graphspot scores **nodes and edges that were absent at fit time**: new accounts, new
 transactions, tomorrow's data. It installs in seconds without torch, takes a pandas
 dataframe or a scipy sparse matrix, and every benchmark number in this README
 regenerates from one command.
@@ -79,7 +79,7 @@ Three design rules, each earned from a failure we measured elsewhere:
 
 | Detector | Level | Labels | Needs | Reference |
 |---|---|---|---|---|
-| `NeighborAggregation` | transform | — | core | makes any tabular model graph-aware |
+| `NeighborAggregation` | transform | n/a | core | makes any tabular model graph-aware |
 | `XGBGraph` | node, edge | yes | core | GADBench rank 1 of 29 |
 | `RFGraph` | node, edge | yes | core | GADBench rank 3 |
 | `FlatBaseline` | node, edge | yes | core | the no-graph control, always available |
@@ -98,7 +98,7 @@ det = graphspot.compat.from_pyod(ECOD()).fit(g)
 
 ## Benchmarks
 
-`graphspot bench --quick` — AUPRC ×100, mean over three seeded trials, out-of-the-box
+`graphspot bench --quick`: AUPRC ×100, mean over three seeded trials, out-of-the-box
 defaults, no torch installed. Tolokers and Questions use the frozen split masks their
 upstream ships.
 
@@ -128,17 +128,17 @@ Strict-inductive Elliptic on a laptop, one command, no torch:
 uv run python scripts/acceptance_elliptic.py
 ```
 
-Fits on time steps 1–34 and scores steps 35–49 as a disjoint graph the model has never
+Fits on time steps 1-34 and scores steps 35-49 as a disjoint graph the model has never
 seen: 203,769 nodes, **fit 10.1s, score 0.8s, peak rss 3.05GB**. The per-step table
 shows why the script refuses to print one aggregate number: the dark-market shutdown
 at step 43 collapses every model from 90s AUPRC to single digits. And on this dataset
-the flat baseline edges out the graph model (56.4 vs 55.3 mean per-step AUPRC) —
+the flat baseline edges out the graph model (56.4 vs 55.3 mean per-step AUPRC).
 Elliptic's features already embed 72 neighborhood aggregates, so the "flat" model is
 quietly graph-informed. The loud baseline exists to surface exactly this.
 
 ## Datasets
 
-Seven loaders with provenance as first-class metadata — every dataset carries
+Seven loaders with provenance as first-class metadata. Every dataset carries
 `label_type` (adjudicated / proxy / injected), `label_source`, license, and
 redistribution status:
 
