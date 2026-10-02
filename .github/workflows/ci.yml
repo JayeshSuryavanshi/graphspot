@@ -41,7 +41,7 @@ jobs:
           bare/bin/python -c "import sys, graphspot; assert 'torch' not in sys.modules; print('bare core ok', graphspot.__version__)"
 
   deep:
-    # the [deep] extra: BWGNN on torch, ubuntu only (macOS torch is exercised locally)
+    # the [deep] extra: BWGNN and GHRN on torch, ubuntu only (macOS torch is exercised locally)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -49,4 +49,4 @@ jobs:
         with:
           python-version: "3.12"
       - run: uv sync --extra deep
-      - run: uv run pytest -q tests/test_bwgnn.py
+      - run: uv run pytest -q tests/test_bwgnn.py tests/test_ghrn.py

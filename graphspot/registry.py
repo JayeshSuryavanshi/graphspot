@@ -12,6 +12,7 @@ _DETECTORS: list[dict[str, Any]] = [
     {"name": "OddBall", "levels": ("node",), "supervised": False, "requires": ()},
     {"name": "Fraudar", "levels": ("edge",), "supervised": False, "requires": ()},
     {"name": "BWGNN", "levels": ("node",), "supervised": True, "requires": ("torch",)},
+    {"name": "GHRN", "levels": ("node",), "supervised": True, "requires": ("torch",)},
 ]
 
 

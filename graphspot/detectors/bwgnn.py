@@ -28,6 +28,17 @@ def _require_torch():
     return torch
 
 
+def _simple_undirected(adj):
+    """Symmetric, binary, self-loop free copy of `adj` (csr)."""
+    import scipy.sparse as sp
+
+    adj = sp.csr_matrix(adj + adj.T)
+    adj.data[:] = 1.0
+    adj.setdiag(0)
+    adj.eliminate_zeros()
+    return adj
+
+
 class BWGNN(BaseDetector):
     """Beta Wavelet GNN (Tang, Li, Li, Gao, Li: "Rethinking Graph Neural Networks for
     Anomaly Detection", ICML 2022), implemented clean-room from the paper.
@@ -72,21 +83,22 @@ class BWGNN(BaseDetector):
         self.weight_decay = weight_decay
 
     def _laplacian(self, g: Graph):
+        return self._laplacian_from_adj(_simple_undirected(g.adj))
+
+    @staticmethod
+    def _laplacian_from_adj(adj):
+        """I - D^-1/2 A D^-1/2 for a symmetric, binary, self-loop free `adj`."""
         torch = _require_torch()
         import scipy.sparse as sp
 
-        adj = g.adj + g.adj.T
-        adj = sp.csr_matrix(adj)
-        adj.data[:] = 1.0
-        adj.setdiag(0)
-        adj.eliminate_zeros()
+        n = adj.shape[0]
         deg = np.asarray(adj.sum(axis=1)).ravel()
         inv_sqrt = np.divide(1.0, np.sqrt(deg), out=np.zeros_like(deg), where=deg > 0)
         norm = sp.diags(inv_sqrt) @ adj @ sp.diags(inv_sqrt)
-        lap = (sp.eye(g.n_nodes) - norm).tocoo()
+        lap = (sp.eye(n) - norm).tocoo()
         idx = torch.tensor(np.vstack([lap.row, lap.col]), dtype=torch.long)
         val = torch.tensor(lap.data, dtype=torch.float32)
-        return torch.sparse_coo_tensor(idx, val, (g.n_nodes, g.n_nodes)).coalesce()
+        return torch.sparse_coo_tensor(idx, val, (n, n)).coalesce()
 
     def _filter_bank(self, lap, h):
         """Apply every Beta wavelet to h. (L/2)^p (I - L/2)^q h is computed by
@@ -133,16 +145,23 @@ class BWGNN(BaseDetector):
         return self.post_(torch.cat(self._filter_bank(lap, h), dim=1))
 
     def fit(self, graph: Any, y: np.ndarray | None = None) -> BWGNN:
-        torch = _require_torch()
+        _require_torch()
         g = as_graph(graph)
         if g.x is None:
-            raise ValueError("BWGNN needs node features (graph.x)")
+            raise ValueError(f"{type(self).__name__} needs node features (graph.x)")
         y = self._validate_labels(g, y, self.level)
+        self._train(self._laplacian(g), g.x, y)
+        self._finalize_fit(self._forward_scores(g))
+        return self
 
+    def _train(self, lap, x_np: np.ndarray, y: np.ndarray) -> None:
+        """Fresh model, seeded, trained full-batch on the labeled nodes of `y`.
+        Sets `pre_` and `post_`.
+        """
+        torch = _require_torch()
         if self.random_state is not None:
             torch.manual_seed(self.random_state)
-        lap = self._laplacian(g)
-        x = torch.tensor(g.x, dtype=torch.float32)
+        x = torch.tensor(x_np, dtype=torch.float32)
         labeled = np.flatnonzero(y >= 0)
         target = torch.tensor(y[labeled], dtype=torch.long)
         pos = int((y[labeled] == 1).sum())
@@ -150,7 +169,7 @@ class BWGNN(BaseDetector):
         weight = torch.tensor([1.0, neg / max(pos, 1)], dtype=torch.float32)
         mask = torch.tensor(labeled, dtype=torch.long)
 
-        self._build_model(g.x.shape[1])
+        self._build_model(x_np.shape[1])
         params = list(self.pre_.parameters()) + list(self.post_.parameters())
         opt = torch.optim.Adam(params, lr=self.lr, weight_decay=self.weight_decay)
         loss_fn = torch.nn.CrossEntropyLoss(weight=weight)
@@ -163,19 +182,19 @@ class BWGNN(BaseDetector):
             loss.backward()
             opt.step()
 
-        self._finalize_fit(self._forward_scores(g))
-        return self
-
     def decision_function(self, graph: Any) -> np.ndarray:
         self._check_fitted()
         return self._forward_scores(as_graph(graph))
 
     def _forward_scores(self, g: Graph) -> np.ndarray:
-        torch = _require_torch()
         if g.x is None:
-            raise ValueError("BWGNN needs node features (graph.x)")
-        lap = self._laplacian(g)
-        x = torch.tensor(g.x, dtype=torch.float32)
+            raise ValueError(f"{type(self).__name__} needs node features (graph.x)")
+        return self._probs(self._laplacian(g), g.x)
+
+    def _probs(self, lap, x_np: np.ndarray) -> np.ndarray:
+        """P(anomaly) per node under the current `pre_`/`post_`, in eval mode."""
+        torch = _require_torch()
+        x = torch.tensor(x_np, dtype=torch.float32)
         self.pre_.eval()
         self.post_.eval()
         with torch.no_grad():
