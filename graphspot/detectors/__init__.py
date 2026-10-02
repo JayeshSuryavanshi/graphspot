@@ -1,4 +1,5 @@
 from graphspot.detectors.bwgnn import BWGNN
+from graphspot.detectors.care_gnn import CAREGNN
 from graphspot.detectors.flat_unsupervised import FlatUnsupervised
 from graphspot.detectors.fraudar import Block, Fraudar
 from graphspot.detectors.ghrn import GHRN
@@ -8,6 +9,7 @@ from graphspot.detectors.trees import FlatBaseline, RFGraph, XGBGraph
 __all__ = [
     "BWGNN",
     "Block",
+    "CAREGNN",
     "FlatBaseline",
     "FlatUnsupervised",
     "Fraudar",

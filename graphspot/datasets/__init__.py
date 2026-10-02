@@ -57,6 +57,8 @@ _MAT_SOURCES = {
         "label_type": "proxy",
         "label_source": "Yelp filtered-review flag, Rayana & Akoglu 2015 via Dou et al. 2020",
         "unlabeled_prefix": 0,
+        # same user / same product and star rating / same product and month
+        "relations": {"net_rur": "R-U-R", "net_rsr": "R-S-R", "net_rtr": "R-T-R"},
     },
     "amazon": {
         "url": "https://data.dgl.ai/dataset/FraudAmazon.zip",
@@ -64,11 +66,13 @@ _MAT_SOURCES = {
         "label_type": "proxy",
         "label_source": "helpful-vote ratio thresholding, Dou et al. 2020",
         "unlabeled_prefix": 3305,
+        # common product / common star rating in a week / top-5% review-text similarity
+        "relations": {"net_upu": "U-P-U", "net_usu": "U-S-U", "net_uvu": "U-V-U"},
     },
 }
 
 
-def _load_fraud_mat(name: str, root: Path | str | None) -> Graph:
+def _load_fraud_mat(name: str, root: Path | str | None, relations: bool = False) -> Graph:
     src = _MAT_SOURCES[name]
     cache = _cache_root(root)
     mat_path = cache / src["mat"]
@@ -86,7 +90,27 @@ def _load_fraud_mat(name: str, root: Path | str | None) -> Graph:
         # Standard protocol since Dou et al. 2020: these leading nodes carry no reliable
         # label (zero positives among them) and are excluded from training and evaluation.
         labels[: src["unlabeled_prefix"]] = -1
-    g = Graph(adj=adj, x=x.astype(np.float64), node_labels=labels)
+    edge_index = edge_type = None
+    relation_names: list[str] = []
+    if relations:
+        missing = [k for k in src["relations"] if k not in mat]
+        if missing:
+            raise ValueError(f"{src['mat']} has no relation matrices {missing}")
+        parts, codes = [], []
+        for code, (key, rel) in enumerate(src["relations"].items()):
+            coo = sp.coo_matrix(mat[key])
+            parts.append(np.vstack([coo.row, coo.col]).astype(np.int64))
+            codes.append(np.full(coo.nnz, code, dtype=np.int64))
+            relation_names.append(rel)
+        edge_index, edge_type = np.hstack(parts), np.concatenate(codes)
+    g = Graph(
+        adj=adj,
+        x=x.astype(np.float64),
+        node_labels=labels,
+        edge_index=edge_index,
+        edge_type=edge_type,
+        relation_names=relation_names,
+    )
     g.provenance = Provenance(  # type: ignore[attr-defined]
         name=name,
         label_type=src["label_type"],
@@ -98,17 +122,23 @@ def _load_fraud_mat(name: str, root: Path | str | None) -> Graph:
     return g
 
 
-def load_yelpchi(root: Path | str | None = None) -> Graph:
-    """YelpChi review-fraud graph (45,954 nodes). Homogeneous union of the 3 relations."""
-    return _load_fraud_mat("yelpchi", root)
+def load_yelpchi(root: Path | str | None = None, *, relations: bool = False) -> Graph:
+    """YelpChi review-fraud graph (45,954 nodes). `adj` is the homogeneous union of
+    the 3 relations. With ``relations=True``, `edge_index`/`edge_type` list every
+    edge of R-U-R, R-S-R and R-T-R (named in `relation_names`), for multi-relation
+    detectors such as CAREGNN; by default the edge list is the union's.
+    """
+    return _load_fraud_mat("yelpchi", root, relations)
 
 
-def load_amazon(root: Path | str | None = None) -> Graph:
-    """Amazon review-fraud graph (11,944 nodes). Homogeneous union of the 3 relations.
+def load_amazon(root: Path | str | None = None, *, relations: bool = False) -> Graph:
+    """Amazon review-fraud graph (11,944 nodes). `adj` is the homogeneous union of
+    the 3 relations; ``relations=True`` adds U-P-U, U-S-U and U-V-U as `edge_type`,
+    as for `load_yelpchi`.
 
     The first 3,305 nodes are unlabeled by convention and carry ``node_labels == -1``.
     """
-    return _load_fraud_mat("amazon", root)
+    return _load_fraud_mat("amazon", root, relations)
 
 
 # ------------------------------------------------- yandex heterophilous .npz pair (MIT)

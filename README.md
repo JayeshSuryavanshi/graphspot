@@ -14,7 +14,7 @@ regenerates from one command.
 
 ```bash
 pip install graphspot            # tree, structural, and baseline detectors
-pip install 'graphspot[deep]'    # + BWGNN, GHRN (torch)
+pip install 'graphspot[deep]'    # + BWGNN, GHRN, CAREGNN (torch)
 ```
 
 ## Sixty seconds
@@ -88,6 +88,7 @@ Three design rules, each earned from a failure we measured elsewhere:
 | `Fraudar` | edge, block | no | core | Hooi et al., KDD 2016 (clean-room, BSD-3) |
 | `BWGNN` | node | yes | `[deep]` | Tang et al., ICML 2022 (clean-room, plain torch sparse) |
 | `GHRN` | node | yes | `[deep]` | Gao et al., WWW 2023 (clean-room, prunes heterophilous edges, then retrains BWGNN) |
+| `CAREGNN` | node | yes | `[deep]` | Dou et al., CIKM 2020 (clean-room, multi-relation: `load_yelpchi(relations=True)`) |
 
 `graphspot.list_detectors()` reports what is usable in your environment. Any PyOD
 detector runs through graphspot's graphs and benchmarks in one line:

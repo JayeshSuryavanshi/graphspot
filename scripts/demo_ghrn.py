@@ -10,6 +10,7 @@ Run: uv run python scripts/demo_ghrn.py
 from __future__ import annotations
 
 import resource
+import sys
 import time
 
 import numpy as np
@@ -54,5 +55,7 @@ for name, load in LOADERS.items():
         f"(per seed {', '.join(f'{d:+.2f}' for d in d_auprc)}; {wins}/{len(SEEDS)} wins)"
     )
 
-rss_gb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1e9
+# ru_maxrss is bytes on macOS, kilobytes on Linux
+rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+rss_gb = rss / 1e9 if sys.platform == "darwin" else rss / 1e6
 print(f"peak rss {rss_gb:.2f}GB (full batch, cpu)")

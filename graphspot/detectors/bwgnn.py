@@ -24,7 +24,10 @@ def _require_torch():
     try:
         import torch
     except ImportError as err:
-        raise ImportError("BWGNN needs torch: pip install 'graphspot[deep]'") from err
+        raise ImportError(
+            "graphspot's deep detectors (BWGNN, GHRN, CAREGNN) need torch: "
+            "pip install 'graphspot[deep]'"
+        ) from err
     return torch
 
 

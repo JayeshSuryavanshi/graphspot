@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sys
 
-DEEP_TEST_FILES = ("test_bwgnn.py", "test_ghrn.py")
+DEEP_TEST_FILES = ("test_bwgnn.py", "test_ghrn.py", "test_care_gnn.py")
 
 
 def pytest_ignore_collect(collection_path, config):
@@ -10,7 +10,7 @@ def pytest_ignore_collect(collection_path, config):
     runtimes: segfault or deadlock, see graphspot.detectors.bwgnn._DARWIN_OMP_MSG).
     Importing a torch test file at collection would load torch into the shared suite
     process and poison every xgboost test, so each is only collected when named
-    explicitly: `pytest tests/test_bwgnn.py tests/test_ghrn.py`. Linux collects
+    explicitly, e.g. `pytest tests/test_bwgnn.py`. Linux collects
     everything, and the deep CI job proves coexistence there.
     """
     if sys.platform != "darwin":
