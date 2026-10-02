@@ -11,9 +11,10 @@ from graphspot.graph import as_graph
 
 
 class GHRN(BWGNN):
-    """Graph Heterophily Reduction Network (Gao, Wang, Li, Feng, Li, Chen: "Addressing
-    Heterophily in Graph Anomaly Detection: A Perspective of Graph Spectrum", WWW 2023),
-    implemented clean-room from the paper, over graphspot's BWGNN encoder.
+    """Graph Heterophily Resistant Network (Gao, Wang, He, Liu, Feng, Zhang:
+    "Addressing Heterophily in Graph Anomaly Detection: A Perspective of Graph
+    Spectrum", WWW 2023), clean-room (no reference code consulted), over graphspot's
+    BWGNN encoder.
 
     Anomalies are heterophilous: their neighbors are mostly normal, and those
     inter-class edges push spectral energy toward high frequencies that a GNN then
@@ -22,16 +23,32 @@ class GHRN(BWGNN):
     1. Train the encoder (BWGNN) on the graph.
     2. Build a label signal Y: one-hot truth on labeled nodes, predicted class
        probabilities everywhere else.
-    3. High-pass it, Z = L Y, with L the symmetric normalized Laplacian. For an
-       edge (i, j), z_i . z_j is positive when both endpoints sit on the same side
-       of their neighborhoods' label average and negative when they disagree.
-    4. Delete the `prune_ratio` fraction of undirected edges with the lowest score,
-       then retrain a fresh encoder on the pruned graph. Repeat for `rounds`.
+    3. Measure 1-hop label change with the random-walk Laplacian,
+       Z = (I - D^-1 A) Y, so z_i = y_i - mean of y over i's neighbors. For an edge
+       (i, j), z_i . z_j < 0 when the endpoints deviate from their neighborhoods in
+       opposite directions: evidence of an inter-class edge. A constant signal gives
+       Z = 0 regardless of degrees, so degree mismatch alone never looks
+       heterophilous (the symmetric normalization does not have this property).
+    4. Delete up to `prune_ratio` of the undirected edges, lowest score first, only
+       among edges with a negative score. Retrain a fresh encoder on the pruned
+       graph. Repeat for `rounds`.
 
-    Inductive: `decision_function` replays the same procedure on the new graph with
-    no labels: each stored stage predicts, prunes, and hands the pruned graph to the
-    next, and the last stage scores. Pruning on unseen data uses predictions only,
-    so it never needs labels it does not have.
+    graphspot extensions beyond the paper's transductive protocol:
+
+    - Inductive scoring. `decision_function` replays the stages on the new graph
+      with no labels: each stored stage predicts, prunes, and hands the pruned
+      graph to the next, and the last stage scores.
+    - `decision_scores_` is computed by the same label-free replay, so it equals
+      `decision_function(train_graph)` exactly. Labels shape the pruning used for
+      training only.
+    - The negative-score guard in step 4, and running on the homogeneous union of
+      relations (`edge_type` is ignored), as BWGNN does.
+
+    The paper's PDF was not reachable when this was written, so the operator,
+    the `prune_ratio` default and the retraining protocol follow the paper's
+    published description ("1-hop label changing of the center node", pruning
+    inter-class edges, then training) and still need checking against its
+    equations and hyperparameter tables.
     """
 
     def __init__(
@@ -79,12 +96,11 @@ class GHRN(BWGNN):
             self._train(lap, g.x, y)
             p_anom = self._probs(lap, g.x)  # leaves the modules in eval mode
             self.stages_.append((copy.deepcopy(self.pre_), copy.deepcopy(self.post_)))
-            adj = self._prune(adj, lap, p_anom, y)
+            adj = self._prune(adj, p_anom, y)
 
         self.n_edges_pruned_ = int((_simple_undirected(g.adj).nnz - adj.nnz) // 2)
-        lap = self._laplacian_from_adj(adj)
-        self._train(lap, g.x, y)
-        self._finalize_fit(self._probs(lap, g.x))
+        self._train(self._laplacian_from_adj(adj), g.x, y)
+        self._finalize_fit(self._score(g))
         return self
 
     def decision_function(self, graph: Any) -> np.ndarray:
@@ -92,6 +108,9 @@ class GHRN(BWGNN):
         g = as_graph(graph)
         if g.x is None:
             raise ValueError("GHRN needs node features (graph.x)")
+        return self._score(g)
+
+    def _score(self, g) -> np.ndarray:
         return self._probs(self._laplacian_from_adj(self._replay_pruning(g)), g.x)
 
     def _replay_pruning(self, g) -> sp.csr_matrix:
@@ -104,21 +123,24 @@ class GHRN(BWGNN):
         try:
             for pre, post in self.stages_:
                 self.pre_, self.post_ = pre, post
-                lap = self._laplacian_from_adj(adj)
-                adj = self._prune(adj, lap, self._probs(lap, g.x), unlabeled)
+                p_anom = self._probs(self._laplacian_from_adj(adj), g.x)
+                adj = self._prune(adj, p_anom, unlabeled)
         finally:
             self.pre_, self.post_ = final
         return adj
 
-    def _prune(self, adj: sp.csr_matrix, lap, p_anom: np.ndarray, y: np.ndarray):
-        """Drop the `prune_ratio` most heterophilous undirected edges of `adj`."""
+    def _prune(self, adj: sp.csr_matrix, p_anom: np.ndarray, y: np.ndarray):
+        """Drop up to `prune_ratio` of the undirected edges of `adj`, most
+        heterophilous first, never an edge without a negative score.
+        """
         upper = sp.triu(adj, k=1).tocoo()
         n_drop = int(np.floor(self.prune_ratio * upper.nnz))
         if n_drop == 0:
             return adj
-        scores = self.edge_heterophily(lap, p_anom, y, upper.row, upper.col)
+        scores = self.edge_heterophily(adj, p_anom, y, upper.row, upper.col)
         # stable sort: ties broken by edge order, so pruning is deterministic
-        drop = np.argsort(scores, kind="stable")[:n_drop]
+        order = np.argsort(scores, kind="stable")[:n_drop]
+        drop = order[scores[order] < 0]
         keep = np.ones(upper.nnz, dtype=bool)
         keep[drop] = False
         rows, cols = upper.row[keep], upper.col[keep]
@@ -126,13 +148,16 @@ class GHRN(BWGNN):
         return sp.csr_matrix(kept + kept.T)
 
     @staticmethod
-    def edge_heterophily(lap, p_anom, y, rows, cols) -> np.ndarray:
-        """z_i . z_j for each edge, with Z = L Y the high-passed label signal. Low
-        (negative) means the endpoints disagree: a likely inter-class edge.
+    def edge_heterophily(adj, p_anom, y, rows, cols) -> np.ndarray:
+        """z_i . z_j for each edge (rows[k], cols[k]), with Z = (I - D^-1 A) Y the
+        1-hop label change of each node. Negative means the endpoints disagree: a
+        likely inter-class edge. `adj` is symmetric and binary; isolated nodes get
+        z = y, but no edge touches them.
         """
-        torch = _require_torch()
-        sig = np.column_stack([1.0 - p_anom, p_anom])
+        sig = np.column_stack([1.0 - p_anom, p_anom]).astype(np.float64)
         labeled = y >= 0
         sig[labeled] = np.eye(2)[y[labeled]]
-        z = torch.sparse.mm(lap, torch.tensor(sig, dtype=torch.float32)).numpy()
-        return np.einsum("ij,ij->i", z[rows], z[cols]).astype(np.float64)
+        deg = np.asarray(adj.sum(axis=1)).ravel()
+        inv = np.divide(1.0, deg, out=np.zeros_like(deg, dtype=np.float64), where=deg > 0)
+        z = sig - inv[:, None] * (adj @ sig)
+        return np.einsum("ij,ij->i", z[rows], z[cols])

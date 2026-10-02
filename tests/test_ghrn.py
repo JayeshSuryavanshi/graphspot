@@ -54,23 +54,61 @@ def test_fit_contract_and_separation():
     assert roc_auc_score(y, det.decision_scores_) > 0.9
     assert det.predict_proba().shape == (g.n_nodes, 2)
     n_undirected = _simple_undirected(g.adj).nnz // 2
-    assert det.n_edges_pruned_ == int(np.floor(0.05 * n_undirected))
+    assert 0 < det.n_edges_pruned_ <= int(np.floor(0.05 * n_undirected))
     assert len(det.stages_) == 1
 
 
 def test_heterophily_score_targets_inter_class_edges():
     """With the true label signal, the lowest-scored edges are inter-class far above
-    their base rate. This pins the high-pass edge score, independent of training."""
+    their base rate. Checks graphspot's 1-hop label-change score, independent of
+    training."""
     g, y = hetero_graph()
-    det = GHRN()
     adj = _simple_undirected(g.adj)
     upper = sp.triu(adj, k=1).tocoo()
-    lap = det._laplacian_from_adj(adj)
-    scores = det.edge_heterophily(lap, y.astype(float), y, upper.row, upper.col)
+    scores = GHRN.edge_heterophily(adj, y.astype(float), y, upper.row, upper.col)
     inter = y[upper.row] != y[upper.col]
     lowest = np.argsort(scores, kind="stable")[: inter.sum()]
     assert inter[lowest].mean() > 0.9
     assert inter.mean() < 0.15
+
+
+def test_heterophily_score_hand_computed():
+    """Path 0-1-2 with labels (0, 1, 0). Z = Y - D^-1 A Y on the anomaly column:
+    z = (0 - 1, 1 - 0, 0 - 1) = (-1, 1, -1), the normal column is its negation, so
+    both edges score 2 * (-1 * 1) = -2."""
+    adj = sp.csr_matrix(np.array([[0, 1, 0], [1, 0, 1], [0, 1, 0]], dtype=float))
+    y = np.array([0, 1, 0])
+    scores = GHRN.edge_heterophily(adj, y.astype(float), y, np.array([0, 1]), np.array([1, 2]))
+    assert np.allclose(scores, [-2.0, -2.0])
+
+
+def test_constant_signal_prunes_nothing_whatever_the_degrees():
+    """A hub plus a path, every node the same class: no edge carries heterophily
+    evidence, so nothing may be pruned. The symmetric-normalized Laplacian fails
+    this (degree mismatch alone gives negative scores); the random-walk one gives
+    Z = 0 exactly."""
+    n = 11
+    rows = [0] * 5 + list(range(5, 10))
+    cols = [1, 2, 3, 4, 5] + list(range(6, 11))
+    adj = sp.coo_matrix((np.ones(len(rows)), (rows, cols)), shape=(n, n))
+    adj = _simple_undirected(adj)
+    upper = sp.triu(adj, k=1).tocoo()
+    y = np.zeros(n, dtype=np.int64)
+    scores = GHRN.edge_heterophily(adj, np.zeros(n), y, upper.row, upper.col)
+    assert np.allclose(scores, 0.0)
+    pruned = GHRN(prune_ratio=0.5)._prune(adj, np.zeros(n), y)
+    assert pruned.nnz == adj.nnz
+
+
+def test_decision_scores_match_decision_function_on_train_graph():
+    """Labels shape training-time pruning only; the fitted scores come from the same
+    label-free replay as decision_function, so the two agree exactly even when the
+    encoder is undertrained."""
+    g, y = hetero_graph()
+    y_semi = y.copy()
+    y_semi[np.random.default_rng(0).random(len(y)) < 0.6] = -1
+    det = GHRN(epochs=3, prune_ratio=0.1, random_state=0).fit(g, y_semi)
+    assert np.array_equal(det.decision_scores_, det.decision_function(g))
 
 
 def test_zero_prune_ratio_prunes_nothing():

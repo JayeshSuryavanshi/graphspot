@@ -87,7 +87,7 @@ Three design rules, each earned from a failure we measured elsewhere:
 | `OddBall` | node | no | core | Akoglu et al., PAKDD 2010 |
 | `Fraudar` | edge, block | no | core | Hooi et al., KDD 2016 (clean-room, BSD-3) |
 | `BWGNN` | node | yes | `[deep]` | Tang et al., ICML 2022 (clean-room, plain torch sparse) |
-| `GHRN` | node | yes | `[deep]` | Gao et al., WWW 2023 (clean-room, heterophily edge pruning over BWGNN) |
+| `GHRN` | node | yes | `[deep]` | Gao et al., WWW 2023 (clean-room, prunes heterophilous edges, then retrains BWGNN) |
 
 `graphspot.list_detectors()` reports what is usable in your environment. Any PyOD
 detector runs through graphspot's graphs and benchmarks in one line:

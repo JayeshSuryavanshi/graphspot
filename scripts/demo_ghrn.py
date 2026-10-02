@@ -1,8 +1,8 @@
 """v0.2 demo: GHRN against its own encoder (BWGNN) on Amazon and YelpChi, same
 seeded stratified splits, paired per seed. GHRN only earns its slot if pruning
 heterophilous edges beats the unpruned encoder, so the paired delta is the
-headline, and the published numbers are the sanity check. GADBench's masks are
-frozen DGL artifacts, so a seeded split stands in and a small gap is expected.
+headline. No published GHRN numbers are recorded here yet: add them (with the
+paper's split protocol) once they are read from the paper, not from memory.
 
 Run: uv run python scripts/demo_ghrn.py
 """
