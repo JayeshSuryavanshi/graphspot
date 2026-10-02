@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -8,6 +9,8 @@ import numpy as np
 import pandas as pd
 import scipy.sparse as sp
 
+_PER_EDGE = ("edge_attr", "edge_type", "edge_time", "edge_labels")
+
 
 @dataclass
 class Graph:
@@ -15,6 +18,7 @@ class Graph:
 
     `adj` is authoritative for structure (aggregation, degrees). `edge_index` and the
     per-edge arrays keep the original edge list, including duplicates, in input order.
+    `edge_type` holds a relation code per edge, and `relation_names[code]` names it.
     """
 
     adj: sp.csr_matrix
@@ -29,6 +33,7 @@ class Graph:
     node_index: pd.Index | None = None
     feature_names: list[str] = field(default_factory=list)
     edge_feature_names: list[str] = field(default_factory=list)
+    relation_names: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.adj = sp.csr_matrix(self.adj)
@@ -40,9 +45,29 @@ class Graph:
                 self.x = self.x[:, None]
             if self.x.shape[0] != self.n_nodes:
                 raise ValueError(f"x has {self.x.shape[0]} rows for {self.n_nodes} nodes")
+        per_edge = [k for k in _PER_EDGE if getattr(self, k) is not None]
         if self.edge_index is None and self.adj.nnz:
+            if per_edge:
+                # adj's own edge order (csr-sorted, duplicates merged) is not the
+                # caller's, so per-edge arrays would silently attach to wrong edges
+                raise ValueError(f"{', '.join(per_edge)} given without edge_index")
             coo = self.adj.tocoo()
             self.edge_index = np.vstack([coo.row, coo.col]).astype(np.int64)
+        for k in per_edge:
+            arr = np.asarray(getattr(self, k))
+            if arr.shape[:1] != (self.n_edges,):
+                raise ValueError(f"{k} has {arr.shape[0]} rows for {self.n_edges} edges")
+            setattr(self, k, arr)
+        names = self.relation_names
+        self.relation_names = [] if names is None else [str(r) for r in names]
+        if self.edge_type is not None:
+            self.edge_type = self.edge_type.astype(np.int64)
+            if self.relation_names and self.edge_type.size:
+                top = int(self.edge_type.max())
+                if top >= len(self.relation_names):
+                    raise ValueError(
+                        f"edge_type code {top} has no name in relation_names {self.relation_names}"
+                    )
 
     @property
     def n_nodes(self) -> int:
@@ -99,8 +124,11 @@ class Graph:
             edge_time = t.to_numpy(dtype=np.float64)
 
         edge_type = None
+        relation_names: list[str] = []
         if relation is not None:
-            edge_type = pd.Categorical(df[relation]).codes.astype(np.int64)
+            cat = pd.Categorical(df[relation])
+            edge_type = cat.codes.astype(np.int64)
+            relation_names = [str(c) for c in cat.categories]
 
         return cls(
             adj=adj,
@@ -112,6 +140,7 @@ class Graph:
             node_index=index,
             feature_names=feature_names,
             edge_feature_names=edge_feature_names,
+            relation_names=relation_names,
         )
 
     @classmethod
@@ -133,18 +162,41 @@ class Graph:
         return cls(adj=sp.csr_matrix(adj), x=x, node_index=pd.Index(nodes), feature_names=names)
 
     def subgraph(self, nodes: np.ndarray) -> Graph:
-        """Structural subgraph over `nodes`, reindexed to 0..k-1. Per-edge arrays are dropped."""
+        """Subgraph over `nodes` (unique ids, or a boolean mask), reindexed to
+        0..k-1. Edges with both endpoints in `nodes` keep their per-edge arrays
+        (type, time, features, labels).
+        """
         nodes = np.asarray(nodes)
         if nodes.dtype == bool:
             nodes = np.flatnonzero(nodes)
+        if np.unique(nodes).size != nodes.size:
+            raise ValueError("subgraph nodes must be unique")
         adj = self.adj[nodes][:, nodes]
+        edge_index = keep = None
+        if self.edge_index is not None:
+            remap = np.full(self.n_nodes, -1, dtype=np.int64)
+            remap[nodes] = np.arange(len(nodes))
+            ends = remap[self.edge_index]
+            keep = (ends >= 0).all(axis=0)
+            edge_index = ends[:, keep]
+
+        def per_edge(arr):
+            return None if arr is None or keep is None else arr[keep]
+
         return Graph(
             adj=adj,
             x=None if self.x is None else self.x[nodes],
+            edge_index=edge_index,
+            edge_attr=per_edge(self.edge_attr),
+            edge_type=per_edge(self.edge_type),
+            edge_time=per_edge(self.edge_time),
             node_labels=None if self.node_labels is None else self.node_labels[nodes],
+            edge_labels=per_edge(self.edge_labels),
             node_time=None if self.node_time is None else self.node_time[nodes],
             node_index=None if self.node_index is None else self.node_index[nodes],
             feature_names=list(self.feature_names),
+            edge_feature_names=list(self.edge_feature_names),
+            relation_names=list(self.relation_names),
         )
 
     def before(self, t: float) -> Graph:
@@ -167,10 +219,30 @@ class Graph:
             edge_time=self.edge_time[keep],
             node_labels=self.node_labels,
             edge_labels=None if self.edge_labels is None else self.edge_labels[keep],
+            node_time=self.node_time,
             node_index=self.node_index,
             feature_names=list(self.feature_names),
             edge_feature_names=list(self.edge_feature_names),
+            relation_names=list(self.relation_names),
         )
+
+
+def _pyg_edge_type(et: Any, n_edges: int) -> np.ndarray | None:
+    """Relation codes from a PyG-style `edge_type`, or None with a warning when it is
+    not one code per edge (only multi-relation detectors read it)."""
+    if et is None:
+        return None
+    arr = np.asarray(et.cpu().numpy() if hasattr(et, "cpu") else et)
+    if arr.ndim == 2 and arr.shape[1] == 1:
+        arr = arr[:, 0]
+    if arr.shape != (n_edges,) or not np.issubdtype(arr.dtype, np.integer):
+        warnings.warn(
+            f"ignoring edge_type of shape {arr.shape}: expected one integer code per edge "
+            f"({n_edges},)",
+            stacklevel=3,
+        )
+        return None
+    return arr.astype(np.int64)
 
 
 def as_graph(g: Any, **kw: Any) -> Graph:
@@ -191,5 +263,6 @@ def as_graph(g: Any, **kw: Any) -> Graph:
         n = int(g.num_nodes)
         adj = sp.csr_matrix((np.ones(ei.shape[1]), (ei[0], ei[1])), shape=(n, n))
         x = None if g.x is None else np.asarray(g.x.cpu().numpy(), dtype=np.float64)
-        return Graph(adj=adj, x=x, edge_index=ei)
+        et = _pyg_edge_type(getattr(g, "edge_type", None), ei.shape[1])
+        return Graph(adj=adj, x=x, edge_index=ei, edge_type=et)
     raise TypeError(f"Cannot interpret {type(g).__name__} as a graph")

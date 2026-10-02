@@ -110,6 +110,9 @@ class BaseDetector(ABC):
         if y.shape != (n,):
             raise ValueError(f"y has shape {y.shape}, expected ({n},) for level={level!r}")
         labeled = y >= 0
+        bad = np.setdiff1d(np.unique(y[labeled]), [0, 1])
+        if bad.size:
+            raise ValueError(f"y must be 0 (normal), 1 (anomaly) or -1 (unlabeled); got {bad}")
         if not labeled.any() or np.unique(y[labeled]).size < 2:
             raise ValueError("y needs at least one labeled example of each class (0 and 1)")
         return y
