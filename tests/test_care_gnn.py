@@ -289,3 +289,77 @@ def test_params_roundtrip_and_bad_inputs():
     bad_g = Graph(adj=g.adj, x=g.x, edge_index=g.edge_index, edge_type=neg)
     with pytest.raises(ValueError, match="negative"):
         CAREGNN(epochs=1).fit(bad_g, y)
+
+
+# ------------------------------------------------- review regressions
+
+
+def test_relation_at_zero_can_recover():
+    """p_r = 0 used to keep no neighbor, leave the distance undefined and switch the
+    bandit off for good. At least one neighbor is kept, so the distance stays
+    defined and a +1 reward lifts p_r off the floor."""
+    adj = _simple_undirected(sp.random(30, 30, density=0.2, format="csr", random_state=0))
+    _, kept = CAREGNN._select_mean(adj, np.arange(30), np.linspace(0, 1, 30), 0.0, np.ones((30, 1)))
+    assert len(kept) == int((np.diff(adj.indptr) > 0).sum())  # old rule: 0 kept
+
+    det = CAREGNN(rl_step=0.5)
+    det.rl_stopped_epoch_ = np.full(1, -1)
+    steps = np.array([-1])  # 0.5 - 0.5 = p_r at the floor
+    assert det._thresholds(steps)[0] == 0.0
+    g_floor = np.array([kept.mean()])
+    det._bandit_step(steps, np.zeros(1, dtype=bool), [[]], g_floor + 0.1, g_floor, 0)
+    assert det._thresholds(steps)[0] == 0.5
+
+
+def test_unnamed_single_relation_fit_matches_codes():
+    """Fit with edge_type (all code 0, no names) matches the scoring graph by code;
+    only a fit without edge_type uses the union."""
+    g, y = camo_graph(n_normal=100, n_anom=20)
+    one = Graph(adj=g.adj, x=g.x, edge_index=g.edge_index, edge_type=np.zeros(g.n_edges))
+    det = CAREGNN(epochs=3, random_state=0).fit(one, y)
+    two = Graph(adj=g.adj, x=g.x, edge_index=g.edge_index, edge_type=g.edge_type)
+    with pytest.raises(ValueError, match="fit on 1"):
+        det.decision_function(two)
+
+
+def test_edgeless_graph_with_relation_names():
+    g, y = camo_graph(n_normal=60, n_anom=10)
+    empty = Graph(
+        adj=sp.csr_matrix(g.adj.shape),
+        x=g.x,
+        edge_type=np.zeros(0, dtype=np.int64),
+        relation_names=["camo", "homo"],
+    )
+    det = CAREGNN(epochs=3, random_state=0).fit(empty, y)
+    assert det.relation_names_ == ["camo", "homo"]
+    assert det.decision_function(empty).shape == (g.n_nodes,)
+    assert det.decision_function(g).shape == (g.n_nodes,)
+
+
+def test_declared_but_unused_unknown_relation_is_fine():
+    g, y = camo_graph(n_normal=100, n_anom=20)
+    det = CAREGNN(epochs=3, random_state=0).fit(g, y)
+    extra = Graph(
+        adj=g.adj,
+        x=g.x,
+        edge_index=g.edge_index,
+        edge_type=g.edge_type,
+        relation_names=[*g.relation_names, "never_used"],
+    )
+    assert np.array_equal(det.decision_function(extra), det.decision_scores_)
+
+
+def test_mutated_names_that_miss_codes_are_rejected():
+    g, y = camo_graph(n_normal=60, n_anom=10)
+    det = CAREGNN(epochs=2, random_state=0).fit(g, y)
+    g.relation_names = ["camo"]  # mutated after construction: code 1 has no name
+    with pytest.raises(ValueError, match="no name"):
+        det.decision_function(g)
+    with pytest.raises(ValueError, match="no name"):
+        CAREGNN(epochs=1).fit(g, y)
+
+
+def test_rl_step_must_be_sane():
+    with pytest.raises(ValueError, match="rl_step"):
+        CAREGNN(rl_step=1e-300)
+    assert CAREGNN(rl_step=0.0).rl_step == 0.0

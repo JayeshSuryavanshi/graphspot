@@ -13,6 +13,7 @@ from graphspot.graph import Graph, as_graph
 _P_INIT = 0.5  # initial keep fraction p_r for every relation
 _RL_WINDOW = 10  # the bandit freezes once |sum of the last 10 rewards| <= _RL_BAND
 _RL_BAND = 2
+_REWARD_NODES = 8192  # fixed labeled nodes whose kept-neighbor distance drives the bandit
 
 
 class CAREGNN(BaseDetector):
@@ -29,7 +30,8 @@ class CAREGNN(BaseDetector):
        on the raw features) gives each node P(fraud). The distance between v and u
        is |P_v - P_u| (half the L1 distance of the two class-probability vectors).
     2. Top-p selection. For each relation r, each center keeps its
-       ceil(p_r * deg_r) nearest neighbors; ties go to the lower node id.
+       ceil(p_r * deg_r) nearest neighbors, at least one; ties go to the lower
+       node id.
     3. Intra-relation: h_{v,r} = ReLU(W_r mean of the kept neighbors' features).
        Inter-relation: z_v = ReLU(W [x_v || sum_r p_r h_{v,r}]), then a linear
        head gives P(fraud). The thresholds p_r double as the relation weights.
@@ -40,7 +42,10 @@ class CAREGNN(BaseDetector):
     5. Bandit thresholds. After each epoch, each p_r moves by +`rl_step` if the
        mean distance of the kept neighbors did not rise since the previous epoch,
        else by -`rl_step`, starting from 0.5 and clipped to [0, 1]. A relation's
-       p_r freezes once |sum of its last 10 rewards| <= 2.
+       p_r freezes once |sum of its last 10 rewards| <= 2. The distance is
+       averaged over a fixed set of labeled nodes (all of them, or 8192 drawn once),
+       so the epoch-to-epoch change reflects p_r and the predictor rather than
+       which nodes the balanced sample happened to draw.
 
     Relations come from `graph.edge_type` (e.g. `load_yelpchi(relations=True)`),
     each made symmetric and binary; without `edge_type` the graph is one relation.
@@ -51,9 +56,11 @@ class CAREGNN(BaseDetector):
     written (the method above follows its published description and needs checking
     against its equations): one layer (the paper's default and best setting), so
     similarity and aggregation act on raw features; the rounding and tie rules in
-    step 2; summing relations in step 3; the reward tie (+1), clipping, the freeze
-    rule taking no step, and no step after the last epoch, so the stored
-    thresholds are the ones the weights were trained with.
+    step 2 (keeping at least one neighbor, so a relation at p_r = 0 still yields a
+    distance and can recover); summing relations in step 3; the fixed reward node
+    set, the reward tie (+1), clipping, the freeze rule taking no step, and no step
+    after the last epoch, so the stored thresholds are the ones the weights were
+    trained with.
 
     Inductive: the label predictor needs only features, the thresholds are fixed
     fractions and the weights are shared, so `decision_function` scores any graph
@@ -88,8 +95,8 @@ class CAREGNN(BaseDetector):
             raise ValueError(f"weight_decay must be >= 0, got {weight_decay}")
         if sim_weight < 0:
             raise ValueError(f"sim_weight must be >= 0, got {sim_weight}")
-        if not 0.0 <= rl_step < 1.0:
-            raise ValueError(f"rl_step must be in [0, 1), got {rl_step}")
+        if not (rl_step == 0.0 or 1e-6 <= rl_step < 1.0):
+            raise ValueError(f"rl_step must be 0 (fixed thresholds) or in [1e-6, 1), got {rl_step}")
         self.hidden = hidden
         self.epochs = epochs
         self.batch_size = batch_size
@@ -122,6 +129,9 @@ class CAREGNN(BaseDetector):
 
         pos, neg = np.flatnonzero(y == 1), np.flatnonzero(y == 0)
         minority, majority = (pos, neg) if len(pos) <= len(neg) else (neg, pos)
+        labeled = np.flatnonzero(y >= 0)
+        if len(labeled) > _REWARD_NODES:
+            labeled = np.sort(rng.choice(labeled, _REWARD_NODES, replace=False))
 
         steps = np.zeros(n_rel, dtype=np.int64)  # p_r = _P_INIT + steps * rl_step, exact
         frozen = np.zeros(n_rel, dtype=bool)
@@ -140,8 +150,9 @@ class CAREGNN(BaseDetector):
             p_fraud = self._fraud_prob(x_t)
             aggs, g_cur = [], np.full(n_rel, np.nan)
             for r, adj in enumerate(rels):
-                agg, kept_dist = self._select_mean(adj, sample, p_fraud, p[r], x)
+                agg, _ = self._select_mean(adj, sample, p_fraud, p[r], x)
                 aggs.append(torch.tensor(agg, dtype=torch.float32))
+                _, kept_dist = self._select_mean(adj, labeled, p_fraud, p[r], x)
                 if kept_dist.size:
                     g_cur[r] = kept_dist.mean()
 
@@ -245,13 +256,13 @@ class CAREGNN(BaseDetector):
     @staticmethod
     def _select_mean(adj, rows, p_fraud, keep_p, x):
         """Mean of the features of each center's ceil(keep_p * deg) nearest
-        neighbors under `adj`, nearest by |p_fraud| difference, ties to the lower
+        neighbors under `adj` (at least one), nearest by |p_fraud| difference, ties to the lower
         node id. Returns the (len(rows), d) means (zero for a center with no kept
         neighbor) and the distances of every kept edge.
         """
         sub = adj[rows]
         deg = np.diff(sub.indptr)
-        k = np.minimum(np.ceil(keep_p * deg - 1e-9), deg).astype(np.int64)
+        k = np.where(deg > 0, np.clip(np.ceil(keep_p * deg - 1e-9), 1, deg), 0).astype(np.int64)
         center = np.repeat(np.arange(len(rows)), deg)
         dist = np.abs(p_fraud[rows][center] - p_fraud[sub.indices])
         order = np.lexsort((sub.indices, dist, center))
@@ -264,18 +275,19 @@ class CAREGNN(BaseDetector):
     # ----------------------------------------------------------- relations
 
     def _fit_relations(self, g: Graph) -> list[sp.csr_matrix]:
-        if g.edge_type is None:
+        has_types = g.edge_type is not None and (g.edge_type.size > 0 or g.relation_names)
+        self.fit_edge_type_ = bool(has_types)
+        if not self.fit_edge_type_:
             self.relation_names_: list[str] = []
             return [_simple_undirected(g.adj)]
-        if (g.edge_type < 0).any():
-            raise ValueError("edge_type has negative codes (edges with no relation)")
-        n_rel = max(int(g.edge_type.max()) + 1, len(g.relation_names))
+        codes = self._codes(g)
+        n_rel = max(int(codes.max()) + 1 if codes.size else 0, len(g.relation_names))
         self.relation_names_ = list(g.relation_names)
-        return self._split(g, g.edge_type, n_rel)
+        return self._split(g, codes, n_rel)
 
     def _score_relations(self, g: Graph) -> list[sp.csr_matrix]:
         n_rel = len(self.relation_p_)
-        if n_rel == 1 and not self.relation_names_:
+        if not self.fit_edge_type_:
             return [_simple_undirected(g.adj)]  # fit as one relation: always the union
         if g.edge_type is None:
             if n_rel == 1:
@@ -284,25 +296,38 @@ class CAREGNN(BaseDetector):
                 f"CAREGNN was fit on {n_rel} relations {self.relation_names_}; "
                 "this graph has no edge_type"
             )
-        codes = g.edge_type
-        if (codes < 0).any():
-            raise ValueError("edge_type has negative codes (edges with no relation)")
+        codes = self._codes(g)
         if self.relation_names_ and g.relation_names:
-            unknown = sorted(set(g.relation_names) - set(self.relation_names_))
+            used = {g.relation_names[c] for c in np.unique(codes)}
+            unknown = sorted(used - set(self.relation_names_))
             if unknown:
                 raise ValueError(f"unknown relation(s) {unknown}; fit on {self.relation_names_}")
-            to_fit = np.array([self.relation_names_.index(r) for r in g.relation_names])
-            codes = to_fit[codes]
+            fitted = {r: i for i, r in enumerate(self.relation_names_)}
+            to_fit = np.array([fitted.get(r, -1) for r in g.relation_names], dtype=np.int64)
+            codes = to_fit[codes]  # declared-but-unused unknown names map to -1, dropped
         elif codes.size and codes.max() >= n_rel:
             raise ValueError(f"edge_type code {codes.max()} but CAREGNN was fit on {n_rel}")
         return self._split(g, codes, n_rel)
 
     @staticmethod
+    def _codes(g: Graph) -> np.ndarray:
+        """`edge_type`, checked here too since Graph fields can change after init."""
+        codes = np.asarray(g.edge_type, dtype=np.int64)
+        if codes.size and codes.min() < 0:
+            raise ValueError("edge_type has negative codes (edges with no relation)")
+        if g.relation_names and codes.size and codes.max() >= len(g.relation_names):
+            raise ValueError(
+                f"edge_type code {codes.max()} has no name in relation_names {g.relation_names}"
+            )
+        return codes
+
+    @staticmethod
     def _split(g: Graph, codes: np.ndarray, n_rel: int) -> list[sp.csr_matrix]:
         n = g.n_nodes
+        edge_index = g.edge_index if g.edge_index is not None else np.empty((2, 0), np.int64)
         out = []
         for r in range(n_rel):
-            ei = g.edge_index[:, codes == r]
+            ei = edge_index[:, codes == r]
             adj = sp.csr_matrix((np.ones(ei.shape[1]), (ei[0], ei[1])), shape=(n, n))
             out.append(_simple_undirected(adj))
         return out

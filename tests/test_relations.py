@@ -33,8 +33,9 @@ def test_from_pandas_names_relations():
 
 def test_edge_type_length_is_checked():
     adj = sp.csr_matrix(np.ones((3, 3)) - np.eye(3))
-    with pytest.raises(ValueError, match="edge_type"):
-        Graph(adj=adj, edge_type=np.zeros(2, dtype=np.int64))
+    ei = np.array([[0, 1], [1, 2]])
+    with pytest.raises(ValueError, match="edge_type has 3 rows for 2 edges"):
+        Graph(adj=adj, edge_index=ei, edge_type=np.zeros(3, dtype=np.int64))
 
 
 def test_subgraph_keeps_internal_edges_with_their_arrays():
@@ -97,3 +98,82 @@ def test_amazon_relations_and_missing_keys(tmp_path):
     fake_mat(tmp_path / "Amazon.mat", ["net_upu", "net_usu"])  # net_uvu missing
     with pytest.raises(ValueError, match="net_uvu"):
         load_amazon(root=tmp_path, relations=True)
+
+
+# ------------------------------------------------- validation (review findings)
+
+
+def test_per_edge_arrays_need_explicit_edge_index():
+    """adj's own edge order is not the caller's: per-edge arrays without edge_index
+    would silently attach to the wrong edges."""
+    adj = sp.csr_matrix(np.ones((3, 3)) - np.eye(3))
+    for k in ("edge_type", "edge_time", "edge_attr", "edge_labels"):
+        with pytest.raises(ValueError, match=f"{k} given without edge_index"):
+            Graph(adj=adj, **{k: np.zeros(6)})
+    ei = np.array([[0, 1], [1, 2]])
+    with pytest.raises(ValueError, match="edge_time has 3 rows for 2 edges"):
+        Graph(adj=adj, edge_index=ei, edge_time=np.zeros(3))
+    assert Graph(adj=sp.csr_matrix((3, 3)), edge_type=np.zeros(0)).n_edges == 0
+
+
+def test_relation_names_normalized_and_must_cover_codes():
+    adj = sp.csr_matrix(np.ones((3, 3)) - np.eye(3))
+    ei = np.array([[0, 1], [1, 2]])
+    for names in (np.array(["a", "b"]), pd.Index(["a", "b"]), ("a", "b")):
+        g = Graph(adj=adj, edge_index=ei, edge_type=[0, 1], relation_names=names)
+        assert g.relation_names == ["a", "b"] and isinstance(g.relation_names, list)
+    with pytest.raises(ValueError, match="code 1 has no name"):
+        Graph(adj=adj, edge_index=ei, edge_type=[0, 1], relation_names=["a"])
+
+
+def test_subgraph_rejects_repeated_nodes():
+    g = Graph.from_pandas(rel_df(), source="s", target="t", relation="rel")
+    with pytest.raises(ValueError, match="unique"):
+        g.subgraph(np.array([0, 1, 1]))
+
+
+def test_before_keeps_node_time():
+    g = Graph.from_pandas(rel_df(), source="s", target="t", time="ts")
+    g.node_time = np.arange(g.n_nodes, dtype=float)
+    assert np.array_equal(g.before(3.0).node_time, g.node_time)
+
+
+class _Tensor:
+    """Just enough of a torch tensor for as_graph's PyG branch, without torch."""
+
+    def __init__(self, a):
+        self.a = np.asarray(a)
+
+    def cpu(self):
+        return self
+
+    def numpy(self):
+        return self.a
+
+
+class _Data:
+    def __init__(self, edge_type):
+        self.edge_index = _Tensor([[0, 1, 2], [1, 2, 0]])
+        self.num_nodes = 3
+        self.x = None
+        self.edge_type = edge_type
+
+
+def test_pyg_edge_type_is_lenient():
+    from graphspot.graph import as_graph
+
+    assert as_graph(_Data(_Tensor([0, 1, 0]))).edge_type.tolist() == [0, 1, 0]
+    assert as_graph(_Data(_Tensor([[0], [1], [1]]))).edge_type.tolist() == [0, 1, 1]
+    assert as_graph(_Data([1, 0, 1])).edge_type.tolist() == [1, 0, 1]  # not a tensor
+    assert as_graph(_Data(None)).edge_type is None
+    with pytest.warns(UserWarning, match="ignoring edge_type"):
+        g = as_graph(_Data(_Tensor(np.eye(3))))  # one-hot: not one code per edge
+    assert g.edge_type is None and g.n_edges == 3
+
+
+def test_labels_must_be_binary():
+    from graphspot.base import BaseDetector
+
+    g = Graph(adj=sp.csr_matrix(np.ones((3, 3)) - np.eye(3)))
+    with pytest.raises(ValueError, match=r"0 \(normal\), 1 \(anomaly\) or -1"):
+        BaseDetector._validate_labels(g, np.array([0, 2, -1]), "node")
